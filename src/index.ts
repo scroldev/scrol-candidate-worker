@@ -14,6 +14,7 @@ export interface Env {
 	// If you set another name in the Wrangler config file for the value for 'binding',
 	// replace "DB" with the variable name you defined.
 	DB: D1Database;
+	photo_storage: R2Bucket;
 }
 
 interface Candidate {
@@ -22,6 +23,7 @@ interface Candidate {
     gender?: string;
     jobTitle?: string;
     cv?: string;
+	photo?:string;
 }
 
 export default {
@@ -67,6 +69,14 @@ export default {
             return getForEmail(email, env);
         }
 
+		if (url.pathname === "/updatepicture" && request.method === "POST"){
+			return updatePicture(email, env, request);
+		}
+		
+		if (url.pathname === "/getpicture" && request.method === "POST"){
+			return getPicture(email, env);
+		}
+
 		if (url.pathname === "/update" && request.method === "POST") {
 			const { candidate } = body as { candidate?: Partial<Candidate>  };
 
@@ -79,6 +89,106 @@ export default {
         return new Response("Not found", { status: 404 });
 	},
 } satisfies ExportedHandler<Env>;
+
+async function getPicture(email: string, env:Env):Promise<Response>{
+    console.log(`Fetching candidate photo with email ${email}`);
+	try{
+		// Check if the user exists
+		const existingUser = await env.DB.prepare(
+			'SELECT * FROM candidate WHERE candidate_email = ?'
+		).bind(email).first();
+
+		if (!existingUser) {
+			return new Response(`No user found with email ${email}`, {
+				status: 400,
+				headers: {
+					"Content-Type": "application/json",
+					"Access-Control-Allow-Origin": "*",
+					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+				},
+			});
+		}
+
+		const id = existingUser.candidate_photo || "default-profile.png";
+
+		const object = await env.photo_storage.get(id as string);
+
+		if (!object) {
+			return new Response("File not found", { status: 404 });
+		}
+	
+		const headers = new Headers();
+		object.writeHttpMetadata(headers);
+		headers.set("Content-Type", object.httpMetadata?.contentType || "application/octet-stream");
+	
+		return new Response(object.body, {
+			status: 200,
+			headers
+		});
+
+	}catch(error){
+		console.error(`Error fetching user photo for email ${email}`, error);
+        return new Response(JSON.stringify({ error: "Internal Server Error" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        });
+	}
+}
+
+async function updatePicture(email: string, env:Env, request:Request):Promise<Response>{
+    console.log(`Updating candidate photo with email ${email}`);
+    try {
+		// Check if the user exists
+		const existingUser = await env.DB.prepare(
+			'SELECT * FROM candidate WHERE candidate_email = ?'
+		).bind(email).first();
+
+		if (!existingUser) {
+			return new Response(`No user found with email ${email}`, {
+				status: 400,
+				headers: {
+					"Content-Type": "application/json",
+					"Access-Control-Allow-Origin": "*",
+					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+				},
+			});
+		}
+
+		const contentType = request.headers.get("content-type") || "";
+
+		if (contentType.includes("multipart/form-data")) {
+			const formData = await request.formData();
+			const file = formData.get("file");
+
+			if (!file || typeof file === "string") {
+				return new Response("Invalid file", { status: 400 });
+			}
+
+			const uuid = crypto.randomUUID(); // Native in Workers
+			const key:string = `profile-${uuid}`;
+
+			 // Update user details
+			 await env.DB.prepare(`UPDATE candidate SET candidate_photo = ? where candidate_email = ?`)
+			.bind(key,email)
+			.run();
+
+			await env.photo_storage.put(key, file.stream(), {
+				httpMetadata: {
+				contentType: file.type,
+				}
+			});
+			return new Response(`Candidate photo updated successfully for ${email}`);
+		}
+
+		return new Response("Expected multipart/form-data", { status: 400 });
+	}catch (error) {
+        console.error(`Error updating user photo for email ${email}`, error);
+        return new Response(JSON.stringify({ error: "Internal Server Error" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        });
+    }
+}
 
 async function updateCandidate(candidate:Partial<Candidate>, env:Env) {
     console.log(`Updating candidate data with email ${candidate.email}`);
@@ -101,9 +211,9 @@ async function updateCandidate(candidate:Partial<Candidate>, env:Env) {
 
         // Update user details
         await env.DB.prepare(
-            `UPDATE candidate SET name = ?, gender = ?, job_title = ?, cv = ? WHERE candidate_email = ?`
+            `UPDATE candidate SET candidate_name = ?, candidate_gender = ?, candidate_jobtitle = ? WHERE candidate_email = ?`
         )
-        .bind(candidate.name, candidate.gender, candidate.jobTitle, candidate.cv, candidate.email)
+        .bind(candidate.name, candidate.gender, candidate.jobTitle, candidate.email)
         .run();
 
         // Retrieve updated candidate
@@ -152,10 +262,11 @@ async function getForEmail(email:string, env:Env) : Promise<Response> {
 			return new Response(
 				JSON.stringify({
 					id: existingUser.candidate_id, 
-					email: existingUser.email,
-					name: existingUser.name,
-					gender: existingUser.gender,
-					jobTitle: existingUser.job_title,
+					email: existingUser.candidate_email,
+					name: existingUser.candidate_name,
+					gender: existingUser.candidate_gender,
+					jobTitle: existingUser.candidate_jobtitle,
+					photo: existingUser.candidate_photo,
 					cv: existingUser.cv
 				}),
 				{   status: 200, 
