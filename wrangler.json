@@ -22,22 +22,22 @@
 	 * databases, object storage, AI inference, real-time communication and more.
 	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
 	 */
-	 "d1_databases": [
-		{
-		"binding": "DB",
-		"database_name": "z27dev",
-		"database_id": "f7416f16-fe86-41cd-b7a4-8270464f3264"
-		}
-	],
-
-	
-	"r2_buckets": [
+	 "r2_buckets": [
 		{
 		  "binding": "photo_storage",
 		  "bucket_name": "photo-storage",
 		  "preview_bucket_name": "photo-storage"
 		}
 	],
+	 "d1_databases": [
+		{
+		"binding": "DB",
+		"database_name": "z27dev",
+		"database_id": "f7416f16-fe86-41cd-b7a4-8270464f3264"
+		}
+	]
+
+	
 	/**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
