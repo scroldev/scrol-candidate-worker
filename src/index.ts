@@ -21,6 +21,7 @@ interface Candidate {
 	email: string;
 	name?: string;
 	gender?: string;
+	sector?: string;
 	jobTitle?: string;
 	cv?: string;
 	photo?: string;
@@ -257,9 +258,9 @@ async function updateCandidate(candidate: Partial<Candidate>, env: Env) {
 
 		// Update user details
 		await env.DB.prepare(
-			`UPDATE candidate SET candidate_name = ?, candidate_gender = ?, candidate_jobtitle = ? WHERE candidate_email = ?`
+			`UPDATE candidate SET candidate_name = ?, candidate_gender = ?, candidate_sector = ?, candidate_jobtitle = ? WHERE candidate_email = ?`
 		)
-			.bind(candidate.name, candidate.gender, candidate.jobTitle, candidate.email)
+			.bind(candidate.name, candidate.gender, candidate.sector, candidate.jobTitle, candidate.email)
 			.run();
 
 		// Retrieve updated candidate
@@ -313,6 +314,7 @@ async function getForEmail(email: string, env: Env): Promise<Response> {
 					email: existingUser.candidate_email,
 					name: existingUser.candidate_name,
 					gender: existingUser.candidate_gender,
+					sector: existingUser.sector,
 					jobTitle: existingUser.candidate_jobtitle,
 					photo: existingUser.candidate_photo,
 					cv: existingUser.cv
