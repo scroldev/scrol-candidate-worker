@@ -60,8 +60,7 @@ export default {
 				status: 400,
 				headers: {
 					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type, Access-Control-Allow-Origin",
+					"Content-Type": "application/json",
 				}
 			});
 		}
@@ -73,8 +72,7 @@ export default {
 				status: 400,
 				headers: {
 					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type, Access-Control-Allow-Origin",
+					"Content-Type": "application/json",
 				}
 			});
 		}
@@ -83,12 +81,11 @@ export default {
 		if (!response.ok) {
 			const errorText = await response.text();
 			console.error(`Token verification failed for token ${token}`, response.status, errorText);
-			return new Response('invalid_token', {
+			return new Response(JSON.stringify({ error: "invalid_token" }), {
 				status: 400,
 				headers: {
 					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type, Access-Control-Allow-Origin",
+					"Content-Type": "application/json",
 				}
 			});
 		}
@@ -136,7 +133,6 @@ async function listCVs(email: string, env: Env): Promise<Response> {
 				headers: {
 					"Content-Type": "application/json",
 					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 				},
 			});
 		}
@@ -261,7 +257,7 @@ async function updateCandidate(candidate: Partial<Candidate>, env: Env) {
 		await env.DB.prepare(
 			`UPDATE candidate SET candidate_name = ?, candidate_gender = ?, candidate_sector = ?, candidate_jobtitle = ?, candidate_company = ? WHERE candidate_email = ?`
 		)
-			.bind(candidate.name, candidate.gender, candidate.sector, candidate.jobTitle, candidate.email, candidate.company)
+			.bind(candidate.name, candidate.gender, candidate.sector, candidate.jobTitle, candidate.company, candidate.email)
 			.run();
 
 		// Retrieve updated candidate
@@ -305,7 +301,6 @@ async function getForEmail(email: string, env: Env): Promise<Response> {
 					headers: {
 						"Content-Type": "application/json",
 						"Access-Control-Allow-Origin": "*", // Allow all origins
-						"Access-Control-Allow-Methods": "GET, POST, OPTIONS", // Allow specific HTTP methods
 					}
 				});
 		} else {
@@ -318,6 +313,7 @@ async function getForEmail(email: string, env: Env): Promise<Response> {
 					sector: existingUser.candidate_sector,
 					jobTitle: existingUser.candidate_jobtitle,
 					photo: existingUser.candidate_photo,
+					company: existingUser.candidate_company,
 					cv: existingUser.cv
 				}),
 				{
@@ -325,7 +321,6 @@ async function getForEmail(email: string, env: Env): Promise<Response> {
 					headers: {
 						"Content-Type": "application/json",
 						"Access-Control-Allow-Origin": "*", // Allow all origins
-						"Access-Control-Allow-Methods": "GET, POST, OPTIONS", // Allow specific HTTP methods
 					}
 				}
 			);
