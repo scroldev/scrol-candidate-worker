@@ -15,6 +15,7 @@ export interface Env {
 	// replace "DB" with the variable name you defined.
 	DB: D1Database;
 	photo_storage: R2Bucket;
+	NOTIFY: Fetcher;
 }
 
 interface Candidate {
@@ -37,20 +38,61 @@ interface CV {
 	originalFilename: string;
 }
 
+const headers = {
+	"Access-Control-Allow-Origin": "*",
+	"Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
+	"Access-Control-Allow-Headers": "Content-Type, Access-Control-Allow-Origin",
+}
+
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		// Handle CORS preflight requests
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
 				status: 204,
-				headers: {
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type, Access-Control-Allow-Origin",
-				}
+				headers
 			});
 		}
 		const url = new URL(request.url);
+
+		//BEGIN Unprotected section
+
+		if (url.pathname === "/find" && request.method === "GET") {
+			const url = new URL(request.url);
+			const query = url.searchParams.get("query");
+
+			if (!query) {
+				return new Response(JSON.stringify({ error: "Missing query" }), {
+					status: 400,
+					headers
+				});
+			}
+			return find(query, env);
+		}
+
+		if (url.pathname === "/viewprofile" && request.method === "GET") {
+			const candidateId = url.searchParams.get("candidateId");
+			if (!candidateId) {
+				return new Response(JSON.stringify({ error: "Missing Candidate Id" }), {
+					status: 400,
+					headers
+				});
+			}
+			return getCandidateInfo(candidateId, "id", env);
+		}
+
+		if (url.pathname === "/getpicture" && request.method === "GET") {
+			const candidateId = url.searchParams.get("candidateId");
+			if (!candidateId) {
+				return new Response(JSON.stringify({ error: "Missing Candidate Id" }), {
+					status: 400,
+					headers
+				});
+			}
+			return getPicture(candidateId, env, "id");
+		}
+
+		//END unprotected section
 
 		let body;
 		try {
@@ -58,10 +100,7 @@ export default {
 		} catch (e) {
 			return new Response('Invalid JSON', {
 				status: 400,
-				headers: {
-					"Access-Control-Allow-Origin": "*",
-					"Content-Type": "application/json",
-				}
+				headers
 			});
 		}
 
@@ -70,10 +109,7 @@ export default {
 		if (!token) {
 			return new Response('Token is required', {
 				status: 400,
-				headers: {
-					"Access-Control-Allow-Origin": "*",
-					"Content-Type": "application/json",
-				}
+				headers
 			});
 		}
 
@@ -83,10 +119,7 @@ export default {
 			console.error(`Token verification failed for token ${token}`, response.status, errorText);
 			return new Response(JSON.stringify({ error: "invalid_token" }), {
 				status: 400,
-				headers: {
-					"Access-Control-Allow-Origin": "*",
-					"Content-Type": "application/json",
-				}
+				headers
 			});
 		}
 
@@ -95,11 +128,48 @@ export default {
 		const email = payload['email'] as string;
 
 		if (url.pathname === "/" && request.method === "POST") {
-			return getForEmail(email, env);
+			return getCandidateInfo(email, "email", env);
 		}
 
+		if (url.pathname === "/block" && request.method === "POST") {
+			const friendId = url.searchParams.get("friendId");
+			if (!friendId) {
+				return new Response(JSON.stringify({ error: "Missing friendId" }), {
+					status: 400,
+					headers
+				});
+			}
+			return blockFriend(friendId, email, env);
+		}
+
+
+		if (url.pathname === "/addfriend" && request.method === "POST") {
+			const friendId = url.searchParams.get("friendId");
+			if (!friendId) {
+				return new Response(JSON.stringify({ error: "Missing friendId" }), {
+					status: 400,
+					headers
+				});
+			}
+			return addFriend(friendId, email, env);
+		}
+
+		if (url.pathname === "/myfriends" && request.method == "POST") {
+			const limit = url.searchParams.get("limit");
+			const page = url.searchParams.get("page");
+			if (limit && page) {
+				return listFriends(email, limit, page, env);
+			} else {
+				return new Response(JSON.stringify({ error: "Missing limit or page params" }), {
+					status: 400,
+					headers
+				});
+			}
+		}
+
+
 		if (url.pathname === "/getpicture" && request.method === "POST") {
-			return getPicture(email, env);
+			return getPicture(email, env, "email");
 		}
 
 		if (url.pathname === "/listcvs" && request.method === "POST") {
@@ -110,14 +180,136 @@ export default {
 			const { candidate } = body as { candidate?: Partial<Candidate> };
 
 			if (!candidate) {
-				return new Response('Candidate is required', { status: 400 });
+				return new Response('Candidate is required', { status: 400, headers });
 			}
 			return updateCandidate(candidate, env);
 		}
 
-		return new Response("Not found", { status: 404 });
+		return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers });
 	},
 } satisfies ExportedHandler<Env>;
+
+async function sendNotification(email: string, text: string, env: Env) {
+	console.log(`Sending email to ${email}`);
+	const req = new Request("https://dummy/sendto", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ message: text, email: email })
+	});
+
+	const response = await env.NOTIFY.fetch(req);
+
+	console.log("response", response);
+	if (!response.ok) {
+		console.error("Unable to send email", response);
+		throw new Error("Unable to send email");
+	}
+}
+
+async function listFriends(email: string, limit: string, page: string, env: Env) {
+	try {
+		const offset = (parseInt(page) - 1) * parseInt(limit);
+		const response = await env.DB.prepare(
+			'SELECT f.friend_id as friendId, f.created, r.candidate_name as name \
+			 FROM friends f, candidate c, candidate r \
+			 WHERE c.candidate_id = f.candidate_id \
+			 AND f.friend_id = r.candidate_id \
+			 AND c.candidate_email = ? \
+			 AND "ACTIVE" = f.status \
+			 UNION \
+			 SELECT f.candidate_id as friendId, f.created, r.candidate_name as name \
+			 FROM friends f, candidate c, candidate r \
+			 WHERE c.candidate_id = f.friend_id \
+			 AND f.candidate_id = r.candidate_id \
+			 AND c.candidate_email = ? \
+			 AND "ACTIVE" = f.status \
+			 limit ? offset ? \
+			 '
+		).bind(email, email, limit, offset).all();
+
+		return new Response(JSON.stringify(response.results), { headers });
+
+	} catch (error) {
+		console.error("Unable to list friends", error);
+		return new Response(JSON.stringify({ error: "Unable to add friend" }), { status: 400, headers });
+	}
+}
+
+
+async function blockFriend(friendId: string, email: string, env: Env) {
+	try {
+		console.log(`Blocking friend with id ${friendId} for email ${email}`);
+
+		const existingUser = await env.DB.prepare(
+			'SELECT * FROM candidate WHERE candidate_email = ?'
+		).bind(email).first();
+
+		if (!existingUser) {
+			throw new Error(`User with email ${email} does not exist`);
+		}
+
+		console.log(`[${friendId}] AND [${existingUser.candidate_id}] will be blocked`);
+
+		const blockQuery: string = 'UPDATE friends SET status = ? \
+									WHERE friend_id = ? AND candidate_id = ?';
+
+		await env.DB.prepare(blockQuery).bind('BLOCKED', friendId, existingUser.candidate_id).run();
+		await env.DB.prepare(blockQuery).bind('BLOCKED', existingUser.candidate_id, friendId).run();
+
+		return new Response(JSON.stringify({ message: `${friendId} has been blocked` }), { headers });
+
+	} catch (error) {
+		console.error("Unable to block friend", error);
+		return new Response(JSON.stringify({ error: "Unable to block friend" }), { status: 400, headers });
+	}
+}
+
+async function addFriend(friendId: string, email: string, env: Env) {
+	try {
+		console.log(`Adding friend ${friendId} for email ${email}`);
+		// Check if the user exists
+		const existingUser = await env.DB.prepare(
+			'SELECT * FROM candidate WHERE candidate_email = ?'
+		).bind(email).first();
+
+		const friend = await env.DB.prepare(
+			'SELECT * FROM candidate WHERE candidate_id = ?'
+		).bind(friendId).first();
+
+		if (existingUser && friend) {
+			await env.DB.prepare(
+				'INSERT INTO friends(candidate_id, friend_id, created, status) values (?,?,?,?)'
+			).bind(existingUser.candidate_id, friendId, new Date().toISOString(), "ACTIVE").run();
+
+			await sendNotification(`${friend.candidate_email}`,
+				`${existingUser.candidate_name} has sent you a friend request! visit <a href="https://scrol.asia/friends">Your Friends List</a> to view.`, env);
+
+			return new Response(JSON.stringify({ message: "Friend added successfully" }), { headers });
+		} else {
+			return new Response(JSON.stringify({ error: "Users do not exist" }), { status: 400, headers });
+		}
+	} catch (error) {
+		console.error("Unable to add friend", error);
+		return new Response(JSON.stringify({ error: "Unable to add friend" }), { status: 400, headers });
+	}
+}
+
+async function find(query: string, env: Env) {
+
+	try {
+		const results = await env.DB.prepare(
+			'SELECT c.candidate_id as id, c.candidate_name as name, c.candidate_email as email FROM candidate c WHERE c.candidate_email like ? OR c.candidate_name like ?'
+		).bind(`%${query}%`, `%${query}%`).all();
+
+		return new Response(JSON.stringify(results.results), { headers });
+	} catch (error) {
+		console.error(`Unable to run find query ${query}`, error);
+		return new Response(JSON.stringify({ error: "Unable to run find query" }), {
+			status: 400,
+			headers
+		});
+	}
+}
 
 async function listCVs(email: string, env: Env): Promise<Response> {
 	console.log(`Fetching candidate cvs using email ${email}`);
@@ -130,10 +322,7 @@ async function listCVs(email: string, env: Env): Promise<Response> {
 		if (!existingUser) {
 			return new Response(`No user found with email ${email}`, {
 				status: 400,
-				headers: {
-					"Content-Type": "application/json",
-					"Access-Control-Allow-Origin": "*",
-				},
+				headers
 			});
 		}
 
@@ -157,41 +346,35 @@ async function listCVs(email: string, env: Env): Promise<Response> {
 		// Return the list as JSON
 		return new Response(JSON.stringify(cvs), {
 			status: 200,
-			headers: {
-				"Content-Type": "application/json",
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-			},
+			headers
 		});
 	} catch (error) {
 		console.error(`Error fetching cv data for email ${email}`, error);
 		return new Response(JSON.stringify({ error: "Internal Server Error" }), {
 			status: 500,
-			headers: {
-				"Content-Type": "application/json",
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-			},
+			headers
 		});
 	}
 }
 
-async function getPicture(email: string, env: Env): Promise<Response> {
-	console.log(`Fetching candidate photo with email ${email}`);
+async function getPicture(queryId: string, env: Env, idType: string): Promise<Response> {
+
+	console.log(`Fetching candidate photo with id ${queryId}`);
 	try {
 		// Check if the user exists
-		const existingUser = await env.DB.prepare(
-			'SELECT * FROM candidate WHERE candidate_email = ?'
-		).bind(email).first();
+		let sqlQuery: string;
+		if ("id" === idType) {
+			sqlQuery = 'SELECT * FROM candidate WHERE candidate_id = ?';
+		} else {
+			sqlQuery = 'SELECT * FROM candidate WHERE candidate_email = ?';
+		}
+
+		const existingUser = await env.DB.prepare(`${sqlQuery}`).bind(queryId).first();
 
 		if (!existingUser) {
-			return new Response(`No user found with email ${email}`, {
+			return new Response(JSON.stringify({ error: `No user found with email ${queryId}` }), {
 				status: 400,
-				headers: {
-					"Content-Type": "application/json",
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				},
+				headers
 			});
 		}
 
@@ -202,34 +385,23 @@ async function getPicture(email: string, env: Env): Promise<Response> {
 		if (!object) {
 			return new Response("File not found", {
 				status: 404,
-				headers: {
-					"Content-Type": "application/json",
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				},
+				headers
 			});
 		}
 
-		const headers = new Headers();
-		object.writeHttpMetadata(headers);
-		headers.set("Content-Type", object.httpMetadata?.contentType || "image/jpeg");
-		headers.set("Access-Control-Allow-Origin", "*");
-		headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		const newHeaders = new Headers();
+		object.writeHttpMetadata(newHeaders);
+		newHeaders.set("Content-Type", object.httpMetadata?.contentType || "image/jpeg");
+		newHeaders.set("Access-Control-Allow-Origin", "*");
+		newHeaders.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 
-		return new Response(object.body, {
-			status: 200,
-			headers
-		});
+		return new Response(object.body, { headers: newHeaders });
 
 	} catch (error) {
-		console.error(`Error fetching user photo for email ${email}`, error);
+		console.error(`Error fetching user photo for id ${queryId}}`, error);
 		return new Response(JSON.stringify({ error: "Internal Server Error" }), {
 			status: 500,
-			headers: {
-				"Content-Type": "application/json",
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-			},
+			headers
 		});
 	}
 }
@@ -245,11 +417,7 @@ async function updateCandidate(candidate: Partial<Candidate>, env: Env) {
 		if (!existingUser) {
 			return new Response(`No user found with email ${candidate.email}`, {
 				status: 400,
-				headers: {
-					"Content-Type": "application/json",
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				},
+				headers
 			});
 		}
 
@@ -266,42 +434,32 @@ async function updateCandidate(candidate: Partial<Candidate>, env: Env) {
 		).bind(candidate.email).first();
 
 		return new Response(
-			JSON.stringify({ message: "Candidate updated successfully", candidate: updatedCandidate }),
-			{
-				status: 200,
-				headers: {
-					"Content-Type": "application/json",
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				},
-			}
-		);
+			JSON.stringify({ message: "Candidate updated successfully", candidate: updatedCandidate }), { headers });
 	} catch (error) {
 		console.error(`Error updating user with email ${candidate.email}`, error);
 		return new Response(JSON.stringify({ error: "Internal Server Error" }), {
 			status: 500,
-			headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+			headers,
 		});
 	}
 }
 
 
-async function getForEmail(email: string, env: Env): Promise<Response> {
-	console.log(`Retrieving candidate data with email ${email}`);
+async function getCandidateInfo(id: string, idType: string, env: Env): Promise<Response> {
+	console.log(`Retrieving candidate data with id ${id}`);
 	try {
+
+		const sql = "email" === idType ? `SELECT * FROM candidate WHERE candidate_email = ?` : `SELECT * FROM candidate WHERE candidate_id = ?`;
 		// Check if user exists in the database
 		const existingUser = await env.DB.prepare(
-			'SELECT * FROM candidate WHERE candidate_email = ?'
-		).bind(email).first();
+			sql
+		).bind(id).first();
 
 		if (!existingUser) {
-			return new Response(`No user found with email ${email}`,
+			return new Response(`No user found with id ${id}`,
 				{
 					status: 400,
-					headers: {
-						"Content-Type": "application/json",
-						"Access-Control-Allow-Origin": "*", // Allow all origins
-					}
+					headers
 				});
 		} else {
 			return new Response(
@@ -315,21 +473,14 @@ async function getForEmail(email: string, env: Env): Promise<Response> {
 					photo: existingUser.candidate_photo,
 					company: existingUser.candidate_company,
 					cv: existingUser.cv
-				}),
-				{
-					status: 200,
-					headers: {
-						"Content-Type": "application/json",
-						"Access-Control-Allow-Origin": "*", // Allow all origins
-					}
-				}
+				}), { headers }
 			);
 		}
 	} catch (error) {
-		console.log(`Error fetching user with email ${email}`, error);
+		console.log(`Error fetching user with id ${id}`, error);
 		return new Response(JSON.stringify({ error: error }), {
 			status: 500,
-			headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+			headers,
 		});
 	}
 }
