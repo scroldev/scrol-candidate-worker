@@ -276,7 +276,8 @@ async function addFriend(friendId: string, email: string, env: Env) {
 			'SELECT * FROM candidate WHERE candidate_id = ?'
 		).bind(friendId).first();
 
-		if (existingUser && friend) {
+
+		if (existingUser && friend  && existingUser.candidate_id !== friend.candidate_id) {
 			await env.DB.prepare(
 				'INSERT INTO friends(candidate_id, friend_id, created, status) values (?,?,?,?)'
 			).bind(existingUser.candidate_id, friendId, new Date().toISOString(), "ACTIVE").run();
