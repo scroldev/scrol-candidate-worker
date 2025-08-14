@@ -16,6 +16,7 @@ export interface Env {
 	DB: D1Database;
 	photo_storage: R2Bucket;
 	NOTIFY: Fetcher;
+	AUTH: Fetcher;
 }
 
 interface Candidate {
@@ -29,13 +30,11 @@ interface Candidate {
 	company?: string;
 }
 
-interface CV {
-	id: string;
-	email: string;
-	name: string;
-	created: string;
-	isDefault: boolean;
-	originalFilename: string;
+interface User {
+	candidate_id: string;
+	candidate_email: string;
+	candidate_name: string;
+	brand_id?: string;
 }
 
 const headers = {
@@ -104,28 +103,9 @@ export default {
 			});
 		}
 
-		const { token } = body as { token?: string };
+		const user = await authenticate(request, env);
 
-		if (!token) {
-			return new Response('Token is required', {
-				status: 400,
-				headers
-			});
-		}
-
-		const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error(`Token verification failed for token ${token}`, response.status, errorText);
-			return new Response(JSON.stringify({ error: "invalid_token" }), {
-				status: 400,
-				headers
-			});
-		}
-
-		const payload = await response.json();
-
-		const email = payload['email'] as string;
+		const email = user.candidate_email;
 
 		if (url.pathname === "/" && request.method === "POST") {
 			return getCandidateInfo(email, "email", env);
@@ -276,11 +256,23 @@ async function addFriend(friendId: string, email: string, env: Env) {
 			'SELECT * FROM candidate WHERE candidate_id = ?'
 		).bind(friendId).first();
 
+		if (existingUser && friend && existingUser.candidate_id !== friend.candidate_id) {
+			const candidateId = existingUser.candidate_id;
+			console.log(`Candidate id is ${candidateId}`);
 
-		if (existingUser && friend  && existingUser.candidate_id !== friend.candidate_id) {
+			const existingFriendship = await env.DB.prepare(
+				'SELECT * FROM friends WHERE (candidate_id = ? AND friend_id = ?) OR (candidate_id = ? AND friend_id = ?)'
+			).bind(friendId, candidateId, candidateId, friendId).first();
+
+			if (existingFriendship) {
+				throw new Error("Friend already friend");
+			}
+
+			console.log("Preparing to insert");
 			await env.DB.prepare(
 				'INSERT INTO friends(candidate_id, friend_id, created, status) values (?,?,?,?)'
-			).bind(existingUser.candidate_id, friendId, new Date().toISOString(), "ACTIVE").run();
+			).bind(candidateId, friendId, new Date().toISOString(), "ACTIVE").run();
+			console.log("Insert success");
 
 			await sendNotification(`${friend.candidate_email}`,
 				`${existingUser.candidate_name} has sent you a friend request! visit <a href="https://scrol.asia/friends">Your Friends List</a> to view.`, env);
@@ -484,4 +476,27 @@ async function getCandidateInfo(id: string, idType: string, env: Env): Promise<R
 			headers,
 		});
 	}
+}
+
+async function authenticate(request: Request, env: Env): Promise<User> {
+	const token = request.headers.get("auth_token");
+
+	if (!token) {
+		throw new Error("Missing token");
+	}
+
+	const notifyRequest = new Request("https://dummy/verify", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ token })
+	});
+
+	const response = await env.AUTH.fetch(notifyRequest);
+	if (!response.ok) {
+		const errorText = await response.text();
+		console.error(`Token verification failed for token ${token}`, response.status, errorText);
+		throw new Error("Invalid token");
+	}
+	const { candidate } = await response.json() as { candidate: User };
+	return candidate;
 }

@@ -41,7 +41,12 @@
 			"binding": "NOTIFY",
 			"service": "scrol-notify-worker",
 			"environment": "production"
-		}
+		},
+        {
+          "binding": "AUTH",
+          "service": "scrol-auth-worker",
+          "environment": "production"
+        }
 	],
 
 	
