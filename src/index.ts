@@ -40,7 +40,7 @@ interface User {
 const headers = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
-	"Access-Control-Allow-Headers": "Content-Type, Access-Control-Allow-Origin",
+	"Access-Control-Allow-Headers": "Content-Type, Access-Control-Allow-Origin, auth_token",
 }
 
 export default {
@@ -93,15 +93,6 @@ export default {
 
 		//END unprotected section
 
-		let body;
-		try {
-			body = await request.json();
-		} catch (e) {
-			return new Response('Invalid JSON', {
-				status: 400,
-				headers
-			});
-		}
 
 		const user = await authenticate(request, env);
 
@@ -157,6 +148,17 @@ export default {
 		}
 
 		if (url.pathname === "/update" && request.method === "POST") {
+			let body;
+			try {
+				body = await request.json();
+			} catch (e) {
+				console.error("Unable to parse json body", e);
+				return new Response(JSON.stringify({ "error": 'Invalid JSON' }), {
+					status: 400,
+					headers
+				});
+			}
+
 			const { candidate } = body as { candidate?: Partial<Candidate> };
 
 			if (!candidate) {
